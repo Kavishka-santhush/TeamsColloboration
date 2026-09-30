@@ -2,7 +2,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-const env = require('../../config/env');
+const env = require('./env');
 
 /**
  * Multer local-storage configuration. Files land in <UPLOAD_DIR>/ organized by
