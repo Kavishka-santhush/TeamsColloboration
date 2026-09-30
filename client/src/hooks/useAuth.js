@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { useUser, useAuth as useClerkAuth, getToken } from '@clerk/clerk-react';
+import { useUser, useAuth as useClerkAuth } from '@clerk/clerk-react';
 import { useDispatch, useSelector } from 'react-redux';
 import { setClerkUser, syncClerkUser } from '../store/slices/authSlice.js';
 import { setAuthTokenProvider, setWorkspaceIdProvider } from '../api/client.js';
@@ -10,7 +10,7 @@ import { connectSocket, disconnectSocket } from '../socket/index.js';
 // lifecycle on sign-in / sign-out.
 export function useAuth() {
   const dispatch = useDispatch();
-  const { isLoaded, isSignedIn, user } = useClerkAuth();
+  const { isLoaded, isSignedIn, user, getToken } = useClerkAuth();
   const { user: clerkUser } = useUser();
   const profile = useSelector((s) => s.auth.profile);
 
