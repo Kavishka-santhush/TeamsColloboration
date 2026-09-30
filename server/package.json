@@ -1,0 +1,59 @@
+{
+  "name": "team-communication-server",
+  "version": "1.0.0",
+  "description": "Backend API + realtime server for the Team Communication Platform (Slack alternative)",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy",
+    "prisma:seed": "prisma db seed",
+    "prisma:studio": "prisma studio"
+  },
+  "prisma": {
+    "seed": "node prisma/seeds/index.js"
+  },
+  "keywords": [
+    "slack-alternative",
+    "team-chat",
+    "realtime",
+    "socket.io",
+    "express",
+    "prisma"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@clerk/clerk-sdk-node": "^5.0.46",
+    "@prisma/client": "^5.19.1",
+    "@react-email/components": "^0.0.21",
+    "@react-email/render": "^0.0.17",
+    "archiver": "^7.0.1",
+    "axios": "^1.7.7",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "express-rate-limit": "^7.4.0",
+    "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^1.4.5-lts.1",
+    "node-cron": "^3.0.3",
+    "nodemailer": "^6.9.15",
+    "pg": "^8.12.0",
+    "puppeteer": "^23.3.0",
+    "react": "^18.3.1",
+    "react-email": "^2.1.6",
+    "simple-peer": "^9.11.1",
+    "socket.io": "^4.7.5",
+    "undici": "^6.19.8",
+    "winston": "^3.14.2",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4",
+    "prisma": "^5.19.1"
+  }
+}

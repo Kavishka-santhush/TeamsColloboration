@@ -1,0 +1,1069 @@
+// ------------------------------------------------------------------
+// Team Communication Platform - Prisma Schema (PostgreSQL)
+// Clean relation graph backing every backend feature described in the
+// product spec. Uses JSONB for flexible metadata, enums for constrained
+// domains, and indexes on high-query fields.
+// ------------------------------------------------------------------
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================== ENUMS ==============================
+
+enum PlatformRole {
+  SUPER_ADMIN
+  USER
+  GUEST
+  BOT
+}
+
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  CHANNEL_MANAGER
+  MEMBER
+  GUEST
+  BOT
+}
+
+enum ChannelType {
+  PUBLIC
+  PRIVATE
+  SHARED
+  ANNOUNCEMENT
+  READ_ONLY
+}
+
+enum PresenceStatus {
+  ACTIVE
+  AWAY
+  DND
+  INVISIBLE
+  OFFLINE
+}
+
+enum MessageType {
+  TEXT
+  FILE
+  VOICE
+  VIDEO
+  GIF
+  SNIPPET
+  SYSTEM
+  BOT
+  CALL_SUMMARY
+  MEETING_NOTES
+}
+
+enum MessageStatus {
+  SENT
+  DELIVERED
+  READ
+}
+
+enum NotificationType {
+  DM
+  MENTION
+  THREAD_REPLY
+  REACTION
+  CHANNEL_INVITE
+  CALL_INCOMING
+  REMINDER
+  WORKFLOW
+  WORKSPACE_INVITE
+  MESSAGE_REQUEST
+}
+
+enum CallType {
+  ONE_TO_ONE_VOICE
+  ONE_TO_ONE_VIDEO
+  GROUP_VOICE
+  GROUP_VIDEO
+  HUDDLE
+  SCHEDULED
+}
+
+enum CallStatus {
+  RUNNING
+  ENDED
+  MISSED
+  CANCELLED
+  SCHEDULED
+}
+
+enum FileCategory {
+  IMAGE
+  VIDEO
+  AUDIO
+  DOCUMENT
+  ARCHIVE
+  CODE
+  OTHER
+}
+
+enum PlanTier {
+  FREE
+  PRO
+  BUSINESS
+  ENTERPRISE
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  TRIALING
+  PAST_DUE
+  CANCELLED
+  INCOMPLETE
+}
+
+enum IntegrationType {
+  GITHUB
+  GITLAB
+  JIRA
+  GOOGLE_CALENDAR
+  RSS
+  INCOMING_WEBHOOK
+  OUTGOING_WEBHOOK
+  CUSTOM_APP
+  ZAPIER
+}
+
+enum WorkflowTriggerType {
+  MESSAGE_POSTED
+  REACTION_ADDED
+  NEW_MEMBER_JOINS
+  SCHEDULED_TIME
+  SLASH_COMMAND
+  FORM_SUBMITTED
+}
+
+enum WorkflowActionType {
+  SEND_CHANNEL_MESSAGE
+  SEND_DM
+  CREATE_REMINDER
+  POST_WEBHOOK
+  ADD_REACTION
+  ARCHIVE_CHANNEL
+}
+
+enum WorkflowRunStatus {
+  SUCCESS
+  FAILED
+  SKIPPED
+}
+
+enum JoinRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// ============================== AUTH & USERS ==============================
+
+model User {
+  id            String       @id @default(uuid())
+  clerkUserId   String       @unique // Clerk identifier, source of truth for auth
+  email         String       @unique
+  username      String       @unique // used for @mentions
+  displayName   String
+  firstName     String?
+  lastName      String?
+  avatarUrl     String? // local /uploads path or provider url
+  title         String? // job title
+  phone         String?
+  timezone      String       @default("UTC")
+  pronouns      String?
+  bio           String?
+  statusMessage String? // custom status text
+  statusEmoji   String? // custom status emoji
+  statusExpiry  DateTime? // when custom status clears
+  presence      PresenceStatus @default(OFFLINE)
+  isDeactivated Boolean      @default(false)
+  isSuperAdmin  Boolean      @default(false)
+  isGuest       Boolean      @default(false)
+  guestExpiry   DateTime? // guest account expiry
+  platformRole  PlatformRole @default(USER)
+  language      String       @default("en")
+  theme         String       @default("system") // light|dark|system
+  lastActiveAt  DateTime?
+  workingHours  Json? // { mon: {start, end}, ... } availability schedule
+  accessibility Json? // a11y settings blob
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  memberships        WorkspaceMember[]
+  channelMemberships ChannelMember[]
+  messages           Message[]
+  reactions          Reaction[]
+  notifications      Notification[]
+  dmConversations    DmParticipant[]
+  starredMessages    StarredMessage[]
+  bookmarks          Bookmark[]
+  reminders          Reminder[]
+  uploadedFiles      FileAsset[]
+  threadFollows      ThreadFollower[]
+  callParticipants   CallParticipant[]
+  ownedWorkspaces    Workspace[]        @relation("WorkspaceOwner")
+  auditLogs          AuditLog[]
+  searchHistory      SearchHistory[]
+  savedSearches      SavedSearch[]
+  blockedUsers       BlockedUser[]      @relation("Blocker")
+  blockedBy          BlockedUser[]      @relation("Blocked")
+  messageRequests    MessageRequest[]   @relation("RequestRecipient")
+  statusChangelog    UserStatusLog[]
+
+  @@index([clerkUserId])
+  @@index([username])
+  @@index([email])
+}
+
+/// Audit of presence/status transitions and away auto-set events.
+model UserStatusLog {
+  id        String       @id @default(uuid())
+  userId    String
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  presence  PresenceStatus
+  source    String       @default("manual") // manual|auto|socket
+  createdAt DateTime     @default(now())
+
+  @@index([userId, createdAt])
+}
+
+// ============================== WORKSPACES ==============================
+
+model Workspace {
+  id                  String        @id @default(uuid())
+  name                String
+  slug                String        @unique // workspace url
+  iconUrl             String?
+  description         String?
+  industry            String?
+  sizeRange           String?
+  discoverable        Boolean       @default(false)
+  allowMessageRequests Boolean      @default(true)
+  retentionDays       Int? // null = keep forever (workspace default)
+  fileRetentionDays   Int?
+  timezone            String        @default("UTC")
+  defaultChannelIds   String[]      @default([]) // auto-join on membership
+  settings            Json          @default("{}") // general workspace settings blob
+  ownerId             String
+  owner               User          @relation("WorkspaceOwner", fields: [ownerId], references: [id])
+  isSuspended         Boolean       @default(false)
+  suspendedReason     String?
+  deletedAt           DateTime?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  members        WorkspaceMember[]
+  channels       Channel[]
+  channelSections ChannelSection[]
+  customEmojis   CustomEmoji[]
+  emojiAliases   EmojiAlias[]
+  integrations   Integration[]
+  workflows      Workflow[]
+  slashCommands  SlashCommand[]
+  auditLogs      AuditLog[]
+  subscription   WorkspaceSubscription?
+  inviteLinks    InviteLink[]
+  joinRequests   JoinRequest[]
+  dms            DmConversation[]
+  calls          Call[]
+  files          FileAsset[]
+  savedSearches  SavedSearch[]
+  legalHolds     LegalHold[]
+  messageRequests MessageRequest[]
+
+  @@index([slug])
+  @@index([ownerId])
+}
+
+/// Join table user <-> workspace with a workspace-scoped role.
+model WorkspaceMember {
+  id          String        @id @default(uuid())
+  userId      String
+  workspaceId String
+  role        WorkspaceRole @default(MEMBER)
+  isDeactivated Boolean     @default(false)
+  joinedAt    DateTime      @default(now())
+
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace     Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  channelMembers ChannelMember[]
+
+  @@unique([userId, workspaceId])
+  @@index([workspaceId])
+}
+
+model InviteLink {
+  id          String    @id @default(uuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  code        String    @unique
+  role        WorkspaceRole @default(MEMBER)
+  maxUses     Int?
+  useCount    Int       @default(0)
+  expiresAt   DateTime?
+  createdBy   String
+  revoked     Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+
+  @@index([workspaceId])
+}
+
+model JoinRequest {
+  id          String          @id @default(uuid())
+  workspaceId String
+  workspace   Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  userId      String
+  message     String?
+  status      JoinRequestStatus @default(PENDING)
+  reviewedBy  String?
+  createdAt   DateTime        @default(now())
+
+  @@unique([workspaceId, userId])
+  @@index([workspaceId, status])
+}
+
+// ============================== CHANNELS ==============================
+
+model Channel {
+  id                 String      @id @default(uuid())
+  workspaceId        String
+  workspace          Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  type               ChannelType @default(PUBLIC)
+  name               String
+  normalizedSlug     String // lower-case name used for #channel references
+  topic              String?
+  purpose            String? // description
+  iconEmoji          String?
+  isArchived         Boolean     @default(false)
+  isDefault          Boolean     @default(false)
+  retentionDays      Int? // channel-level retention override
+  postingAllowedRoles WorkspaceRole[] @default([OWNER, ADMIN, CHANNEL_MANAGER, MEMBER])
+  canMembersAddOthers Boolean    @default(true)
+  settings           Json        @default("{}")
+  lastActivityAt     DateTime    @default(now())
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  members      ChannelMember[]
+  messages     Message[]
+  sections     ChannelSectionMember[]
+  pinned       PinnedMessage[]
+  files        FileAsset[]
+  calls        Call[]
+  integrations Integration[]
+  blockedNotif NotificationPreference[]
+
+  @@unique([workspaceId, normalizedSlug])
+  @@index([workspaceId, type])
+}
+
+model ChannelMember {
+  id        String        @id @default(uuid())
+  userId    String
+  channelId String
+  workspaceMembershipId String
+  workspaceMembership WorkspaceMember @relation(fields: [workspaceMembershipId], references: [id], onDelete: Cascade)
+  isMuted   Boolean       @default(false)
+  isManager Boolean       @default(false)
+  joinedAt  DateTime      @default(now())
+  lastReadAt DateTime     @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, channelId])
+  @@index([channelId])
+}
+
+/// Sidebar organisation: named sections grouping channels.
+model ChannelSection {
+  id          String    @id @default(uuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name        String
+  position    Int       @default(0)
+  createdAt   DateTime  @default(now())
+
+  channels ChannelSectionMember[]
+
+  @@index([workspaceId])
+}
+
+model ChannelSectionMember {
+  id         String         @id @default(uuid())
+  sectionId  String
+  section    ChannelSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  channelId  String
+  channel    Channel        @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  position   Int            @default(0)
+
+  @@unique([sectionId, channelId])
+}
+
+// ============================== MESSAGES ==============================
+
+model Message {
+  id           String      @id @default(uuid())
+  workspaceId  String
+  channelId    String?
+  channel      Channel?    @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  dmConversationId String?
+  dmConversation DmConversation? @relation(fields: [dmConversationId], references: [id], onDelete: Cascade)
+  authorId     String
+  author       User        @relation(fields: [authorId], references: [id])
+  type         MessageType @default(TEXT)
+  status       MessageStatus @default(SENT)
+  body         String // plain-text / markdown source
+  richContent  Json? // Tiptap doc JSON
+  mentions     Json? // mention metadata (users/channels/broadcast/urls)
+  metadata     Json        @default("{}") // attachments summary, unfurl data, etc.
+  isEdited     Boolean     @default(false)
+  isDeleted    Boolean     @default(false)
+  deleteMode   String? // placeholder|full
+  threadRootId String? // if this message is a reply inside a thread
+  scheduledAt  DateTime? // future send time (scheduled message)
+  sentAt       DateTime    @default(now())
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  // search vector maintained by DB trigger (see migration)
+  searchVector Unsupported(String) @db.TsVector
+
+  reactions     Reaction[]
+  attachments   FileAsset[]
+  edits         MessageEdit[]
+  pinnedBy      PinnedMessage[]
+  starredBy     StarredMessage[]
+  bookmarks     Bookmark[]
+  reminders     Reminder[]
+  parentThread  Thread?        @relation("ThreadRoot")
+  forwardedFrom Message?       @relation("Forward", fields: ["forwardedFromId"], references: [id])
+  forwardedTo   Message[]      @relation("Forward")
+  forwardedFromId String?
+  readReceipts  MessageReadReceipt[]
+  translations  MessageTranslation[]
+
+  @@index([channelId, sentAt])
+  @@index([dmConversationId, sentAt])
+  @@index([workspaceId, sentAt])
+  @@index([authorId])
+  @@index([threadRootId])
+}
+
+/// Preserved edit history for messages (feature: edit history).
+model MessageEdit {
+  id        String   @id @default(uuid())
+  messageId String
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  body      String
+  editedBy  String
+  createdAt DateTime @default(now())
+
+  @@index([messageId])
+}
+
+model Reaction {
+  id        String   @id @default(uuid())
+  messageId String
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emoji     String // unicode or custom emoji name
+  isCustom  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@unique([messageId, userId, emoji])
+  @@index([messageId])
+}
+
+model MessageReadReceipt {
+  id        String   @id @default(uuid())
+  messageId String
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  userId    String
+  readAt    DateTime @default(now())
+
+  @@unique([messageId, userId])
+  @@index([messageId])
+}
+
+/// AI-generated inline translation of a message for a target language.
+model MessageTranslation {
+  id        String   @id @default(uuid())
+  messageId String
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  language  String
+  content   String
+  createdAt DateTime @default(now())
+
+  @@unique([messageId, language])
+}
+
+// ============================== THREADS ==============================
+
+model Thread {
+  id            String   @id @default(uuid())
+  workspaceId   String
+  rootMessageId String   @unique
+  rootMessage   Message  @relation("ThreadRoot", fields: [rootMessageId], references: [id], onDelete: Cascade)
+  channelId     String?
+  replyCount    Int      @default(0)
+  lastReplyAt   DateTime @default(now())
+  alsoSendChannel Boolean @default(false)
+  createdAt     DateTime @default(now())
+
+  participants ThreadParticipant[]
+  followers    ThreadFollower[]
+
+  @@index([workspaceId])
+  @@index([channelId])
+}
+
+model ThreadParticipant {
+  id       String  @id @default(uuid())
+  threadId String
+  thread   Thread  @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  userId   String
+  lastReadAt DateTime @default(now())
+
+  @@unique([threadId, userId])
+}
+
+model ThreadFollower {
+  id       String  @id @default(uuid())
+  threadId String
+  thread   Thread  @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  userId   String
+  user     User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([threadId, userId])
+}
+
+// ============================== DIRECT MESSAGES ==============================
+
+model DmConversation {
+  id           String    @id @default(uuid())
+  workspaceId  String
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  isGroup      Boolean   @default(false)
+  name         String? // optional group name
+  isMuted      Boolean   @default(false)
+  retentionDays Int?
+  lastActivityAt DateTime @default(now())
+  convertedChannelId String? // if group dm converted to channel
+  createdAt    DateTime  @default(now())
+
+  participants DmParticipant[]
+  messages     Message[]
+  requests     MessageRequest[]
+
+  @@index([workspaceId, lastActivityAt])
+}
+
+model DmParticipant {
+  id        String         @id @default(uuid())
+  dmId      String
+  dm        DmConversation @relation(fields: [dmId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lastReadAt DateTime      @default(now())
+  joinedAt  DateTime       @default(now())
+
+  @@unique([dmId, userId])
+  @@index([userId])
+}
+
+/// Message requests from users outside a workspace / blocked flows.
+model MessageRequest {
+  id           String    @id @default(uuid())
+  workspaceId  String
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  dmId         String?
+  dm           DmConversation? @relation(fields: [dmId], references: [id], onDelete: Cascade)
+  requesterId  String
+  recipientId  String
+  recipient    User      @relation("RequestRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+  status       String    @default("pending") // pending|accepted|declined|hidden
+  createdAt    DateTime  @default(now())
+
+  @@index([recipientId, status])
+}
+
+model BlockedUser {
+  id          String   @id @default(uuid())
+  blockerId   String
+  blocker     User     @relation("Blocker", fields: [blockerId], references: [id], onDelete: Cascade)
+  blockedId   String
+  blocked     User     @relation("Blocked", fields: [blockedId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+
+  @@unique([blockerId, blockedId])
+}
+
+// ============================== FILES ==============================
+
+model FileAsset {
+  id           String       @id @default(uuid())
+  workspaceId  String
+  workspace    Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  uploaderId   String
+  uploader     User         @relation(fields: [uploaderId], references: [id])
+  channelId    String?
+  channel      Channel?     @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  messageId    String?
+  message      Message?     @relation(fields: ["messageId"], references: ["id"], onDelete: SetNull)
+  originalName String
+  storedName   String       @unique // filename on disk under /uploads
+  path         String // relative path
+  mimeType     String
+  sizeBytes    Int
+  category     FileCategory @default(OTHER)
+  thumbUrl     String?
+  // version history: new version points to previous
+  version      Int          @default(1)
+  previousId   String?
+  metadata     Json         @default("{}") // dimensions, duration, snippet language, etc.
+  deletedAt    DateTime?
+  createdAt    DateTime     @default(now())
+
+  comments FileComment[]
+
+  @@index([workspaceId, category])
+  @@index([channelId])
+  @@index([uploaderId])
+}
+
+/// Snippet / code-sharing body (also could live in FileAsset.metadata; kept
+/// separate for readability + syntax highlighting language selection).
+model Snippet {
+  id          String    @id @default(uuid())
+  workspaceId String
+  authorId    String
+  title       String
+  language    String    @default("plaintext")
+  body        String
+  channelId   String?
+  visibility  String    @default("public") // public|private
+  createdAt   DateTime  @default(now())
+
+  @@index([workspaceId])
+}
+
+model FileComment {
+  id       String    @id @default(uuid())
+  fileId   String
+  file     FileAsset @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  userId   String
+  body     String
+  createdAt DateTime @default(now())
+
+  @@index([fileId])
+}
+
+// ============================== USER MESSAGE STATE ==============================
+
+model PinnedMessage {
+  id        String   @id @default(uuid())
+  channelId String
+  channel   Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  messageId String
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  pinnedBy  String
+  createdAt DateTime @default(now())
+
+  @@unique([channelId, messageId])
+}
+
+model StarredMessage {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messageId String
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, messageId])
+}
+
+model Bookmark {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messageId  String?
+  message    Message? @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  fileId     String?
+  linkUrl    String?
+  label      String?
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
+}
+
+model Reminder {
+  id          String    @id @default(uuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messageId   String?
+  message     Message?  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  channelId   String?
+  note        String?
+  remindAt    DateTime
+  notified    Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+
+  @@index([remindAt, notified])
+}
+
+// ============================== CALLS / HUDDLES ==============================
+
+model Call {
+  id            String    @id @default(uuid())
+  workspaceId   String
+  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  channelId     String?
+  channel       Channel?  @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  type          CallType  @default(ONE_TO_ONE_VOICE)
+  status        CallStatus @default(RUNNING)
+  hostId        String
+  scheduledAt   DateTime?
+  startedAt     DateTime?
+  endedAt       DateTime?
+  durationSec   Int?
+  summary       String? // AI meeting notes / summary
+  actionItems   Json? // AI action items
+  transcript    Json? // closed captions transcript
+  maxParticipants Int     @default(50)
+  createdAt     DateTime  @default(now())
+
+  participants CallParticipant[]
+  recordings   CallRecording[]
+
+  @@index([workspaceId, status])
+  @@index([channelId])
+}
+
+model CallParticipant {
+  id        String   @id @default(uuid())
+  callId    String
+  call      Call     @relation(fields: [callId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  isMuted   Boolean  @default(false)
+  isHost    Boolean  @default(false)
+  handRaised Boolean @default(false)
+  joinedAt  DateTime @default(now())
+  leftAt    DateTime?
+
+  @@unique([callId, userId])
+}
+
+model CallRecording {
+  id         String   @id @default(uuid())
+  callId     String
+  call       Call     @relation(fields: [callId], references: [id], onDelete: Cascade)
+  fileId     String // reference to FileAsset (stored locally)
+  durationSec Int
+  createdAt  DateTime @default(now())
+
+  @@index([callId])
+}
+
+// ============================== EMOJI ==============================
+
+model CustomEmoji {
+  id          String    @id @default(uuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name        String // :shortcode:
+  imageUrl    String // /uploads path
+  isAnimated  Boolean   @default(false)
+  createdBy   String
+  approved    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+
+  @@unique([workspaceId, name])
+}
+
+model EmojiAlias {
+  id          String    @id @default(uuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  alias       String
+  targetEmoji String
+  createdAt   DateTime  @default(now())
+
+  @@unique([workspaceId, alias])
+}
+
+model EmojiRecentlyUsed {
+  id     String @id @default(uuid())
+  userId String
+  emoji  String
+  usedAt DateTime @default(now())
+
+  @@unique([userId, emoji])
+}
+
+// ============================== NOTIFICATIONS ==============================
+
+model Notification {
+  id          String           @id @default(uuid())
+  userId      String
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspaceId String?
+  type        NotificationType
+  title       String
+  body        String?
+  data        Json             @default("{}") // deep-link payload (channelId/messageId/..)
+  isRead      Boolean          @default(false)
+  readAt      DateTime?
+  channel     String           @default("in_app") // in_app|email|push|desktop
+  createdAt   DateTime         @default(now())
+
+  @@index([userId, isRead, createdAt])
+}
+
+/// Per-user, optionally per-channel notification overrides.
+model NotificationPreference {
+  id          String     @id @default(uuid())
+  userId      String
+  workspaceId String?
+  channelId   String?
+  channel     Channel?   @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  scope       String     @default("all_messages") // all_messages|mentions_only|nothing
+  emailDigest String     @default("daily") // immediate|hourly|daily|off
+  desktopPush Boolean    @default(true)
+  sound       String     @default("default")
+  dndEnabled  Boolean    @default(false)
+  dndSchedule Json? // { start, end, days }
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@index([userId, workspaceId])
+}
+
+// ============================== WORKFLOWS & COMMANDS ==============================
+
+model Workflow {
+  id          String    @id @default(uuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  isTemplate  Boolean   @default(false)
+  enabled     Boolean   @default(true)
+  triggerType WorkflowTriggerType
+  triggerConfig Json     @default("{}")
+  actions     Json      @default("[]") // array of { type, config }
+  formFields  Json? // for FORM_SUBMITTED builder
+  createdBy   String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  runs WorkflowRun[]
+
+  @@index([workspaceId, enabled])
+}
+
+model WorkflowRun {
+  id         String            @id @default(uuid())
+  workflowId String
+  workflow   Workflow          @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  status     WorkflowRunStatus
+  input      Json              @default("{}")
+  output     Json              @default("{}")
+  error      String?
+  startedAt  DateTime          @default(now())
+  finishedAt DateTime?
+
+  @@index([workflowId, startedAt])
+}
+
+model SlashCommand {
+  id          String    @id @default(uuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name        String // without leading slash
+  description String?
+  isBuiltin   Boolean   @default(false)
+  webhookUrl  String? // outbound trigger for custom commands
+  createdBy   String
+  createdAt   DateTime  @default(now())
+
+  @@unique([workspaceId, name])
+}
+
+// ============================== INTEGRATIONS ==============================
+
+model Integration {
+  id          String          @id @default(uuid())
+  workspaceId String
+  workspace   Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  channelId   String?
+  channel     Channel?        @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  type        IntegrationType
+  name        String
+  enabled     Boolean         @default(true)
+  // encrypted secret (bot token / webhook signing secret) via encryption.util
+  secretEncrypted String?
+  config      Json            @default("{}")
+  apiKeyHash  String?         // for custom app / bot API key validation
+  createdBy   String
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  webhookLogs IntegrationLog[]
+
+  @@index([workspaceId, type])
+}
+
+model IntegrationLog {
+  id            String      @id @default(uuid())
+  integrationId String
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  direction     String      @default("inbound") // inbound|outbound
+  event         String
+  payload       Json        @default("{}")
+  statusCode    Int?
+  createdAt     DateTime    @default(now())
+
+  @@index([integrationId, createdAt])
+}
+
+// ============================== SEARCH ==============================
+
+model SearchHistory {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  query     String
+  filters   Json?
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+model SavedSearch {
+  id          String    @id @default(uuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspaceId String?
+  workspace   Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name        String
+  query       String
+  filters     Json?
+  createdAt   DateTime  @default(now())
+
+  @@index([userId])
+}
+
+// ============================== ANALYTICS ==============================
+
+model AnalyticsSnapshot {
+  id             String   @id @default(uuid())
+  workspaceId    String
+  date           DateTime @db.Date
+  activeMembers  Int      @default(0)
+  messagesSent   Int      @default(0)
+  filesShared    Int      @default(0)
+  channelsActive Int      @default(0)
+  callMinutes    Int      @default(0)
+  storageBytes   BigInt   @default(0)
+  extra          Json     @default("{}")
+  createdAt      DateTime @default(now())
+
+  @@unique([workspaceId, date])
+  @@index([workspaceId, date])
+}
+
+model AiUsageLog {
+  id          String   @id @default(uuid())
+  workspaceId String
+  userId      String?
+  feature     String // summarize|smart_reply|translate|sentiment|...
+  model       String
+  tokensIn    Int      @default(0)
+  tokensOut   Int      @default(0)
+  costUsd     Decimal  @default(0) @db.Decimal(10, 6)
+  createdAt   DateTime @default(now())
+
+  @@index([workspaceId, createdAt])
+}
+
+// ============================== COMPLIANCE & AUDIT ==============================
+
+model AuditLog {
+  id          String       @id @default(uuid())
+  workspaceId String?
+  workspace   Workspace?   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  actorId     String?
+  actor       User?        @relation(fields: [actorId], references: [id])
+  action      String // e.g. channel.deleted, member.role.changed
+  targetType  String
+  targetId    String?
+  details     Json         @default("{}")
+  ipAddress   String?
+  createdAt   DateTime     @default(now())
+
+  @@index([workspaceId, createdAt])
+  @@index([actorId])
+}
+
+model LegalHold {
+  id          String    @id @default(uuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  userId      String? // hold scoped to a user
+  reason      String
+  active      Boolean   @default(true)
+  createdBy   String
+  createdAt   DateTime  @default(now())
+
+  @@index([workspaceId, active])
+}
+
+// ============================== BILLING ==============================
+
+model SubscriptionPlan {
+  id                  String   @id @default(uuid())
+  tier                PlanTier @unique
+  name                String
+  priceMonthlyUsd     Decimal  @default(0) @db.Decimal(10, 2)
+  priceYearlyUsd      Decimal  @default(0) @db.Decimal(10, 2)
+  stripePriceId       String?
+  // capability limits
+  maxWorkspaces       Int? // null = unlimited
+  historyRetentionDays Int? // null = unlimited
+  storagePerMemberMb  Int? // null = unlimited
+  maxGroupCallSize    Int
+  features            Json   @default("{}") // booleans: ai, sso, compliance, workflows
+  isActive            Boolean @default(true)
+
+  subscriptions WorkspaceSubscription[]
+}
+
+model WorkspaceSubscription {
+  id              String             @id @default(uuid())
+  workspaceId     String             @unique
+  workspace       Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  planId          String
+  plan            SubscriptionPlan   @relation(fields: [planId], references: [id])
+  status          SubscriptionStatus @default(TRIALING)
+  stripeCustomerId String?
+  stripeSubId     String?
+  currentPeriodEnd DateTime?
+  seats           Int                @default(1)
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  @@index([planId])
+}
