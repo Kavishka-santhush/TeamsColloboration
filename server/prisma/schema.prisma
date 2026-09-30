@@ -435,7 +435,7 @@ model Message {
   updatedAt    DateTime    @updatedAt
 
   // search vector maintained by DB trigger (see migration)
-  searchVector Unsupported(String) @db.TsVector
+  searchVector Unsupported("tsvector")?
 
   reactions     Reaction[]
   attachments   FileAsset[]
@@ -445,7 +445,7 @@ model Message {
   bookmarks     Bookmark[]
   reminders     Reminder[]
   parentThread  Thread?        @relation("ThreadRoot")
-  forwardedFrom Message?       @relation("Forward", fields: ["forwardedFromId"], references: [id])
+  forwardedFrom Message?       @relation("Forward", fields: [forwardedFromId], references: [id])
   forwardedTo   Message[]      @relation("Forward")
   forwardedFromId String?
   readReceipts  MessageReadReceipt[]
@@ -620,7 +620,7 @@ model FileAsset {
   channelId    String?
   channel      Channel?     @relation(fields: [channelId], references: [id], onDelete: SetNull)
   messageId    String?
-  message      Message?     @relation(fields: ["messageId"], references: ["id"], onDelete: SetNull)
+  message      Message?     @relation(fields: [messageId], references: [id], onDelete: SetNull)
   originalName String
   storedName   String       @unique // filename on disk under /uploads
   path         String // relative path
